@@ -1,0 +1,113 @@
+#+title: Readme de Scrappers para seguimiento financiero
+#+author: Eduardo Gomezcaña
+* Paquete
+Es un paquete muy simple para consultar la información de valores de manera
+condensada para poder usarla en el análisis de tendencias y particularmente en
+el seguimiento de un portafolio.
+
+* Módulos
+El paquete de momento tiene sólo dos módulos uno para /[[https://www.databursatil.com/][DataBursatil]]/ una /API/
+para la consulta de activos en mercado mexicano y otra para la /API/ de
+/[[https://www.coingecko.com/es][CoinGecko]]/ para consultar el valor de criptomonedas.
+
+** DataBursatil
+La documentación de /DataBursatil/ documenta varias formas de extraer
+información de ésta. En este módulo simplemente se atraen dos de estas maneras,
+el precio /en vivo/ y el precio histórico en un rango de fechas. Debe tenerse en
+cuenta que se requiere un token que funciona con un sistema de créditos para que
+la /API/ responda.
+
+La consulta del precio /en vivo/ puede realizarse utilizando el método
+~last_price~:
+#+begin_src python :tangle no
+  from scrappers.src import databursatil as datab
+
+  TOKEN = "some_token"
+
+  scrapper = datab.DataBursatil(TOKEN)
+  price = scrapper.last_price(ticker = "VOO", series = "*")
+#+end_src
+
+La consulta del precio histórico puede realizarse utilizando el método
+~price_history~:
+#+begin_src python :tangle no
+  from scrappers.src import databursatil as datab
+  from datetime import datetime
+
+  TOKEN = "some_token"
+  init_date = datetime(2025, 6, 10).date()
+  end_date  = datetime(2025, 6, 16).date()
+
+  scrapper = datab.DataBursatil(TOKEN)
+  prices_dic = scrapper.price_history(init=init_date, end=end_date, ticker = "VOO", series = "*")
+#+end_src
+
+También, hay una forma de procesar la información histórica que se consulta
+aglutinando en un promedio semanal, este promedio sólo se realiza sobre las
+semanas donde la información ya está disponible. Por ejemplo, si la fecha que se
+da es un miércoles, se considera la semana anterior y no la que está en curso.
+El método ~weekly_mean_price_history~ tiene el mismo comportamiento que
+~price_history~.
+#+begin_src python :tangle no
+  from scrappers.src import databursatil as datab
+  from datetime import datetime
+
+  TOKEN = "some_token"
+  init_date = datetime(2025, 6, 10).date()
+  end_date  = datetime(2025, 6, 16).date()
+
+  scrapper = datab.DataBursatil(TOKEN)
+  prices_dic = scrapper.weekly_price_history(init=init_date, end=end_date, ticker = "VOO", series = "*")
+#+end_src
+
+** CoinGecko
+El uso del /scrapper/ para CoinGecko no es muy diferente, sigue la documentación
+de la /API/ de  /CoinGecko/ tanto para el precio actual como para los históricos
+y posee también dos funciones. La única diferencia es que se usa el nombre de la
+moneda para solicitar la información.
+
+Para consultar el precio /en vivo/, se puede realizarse llamando al método
+~last_price~ de la clase ~CoinGecko~:
+#+begin_src python :tangle no
+  from scrappers.src import coingecko as datac
+
+  scrapper = datac.CoinGecko()
+  price = scrapper.last_price(coin_name="bitcoin")
+#+end_src
+
+La consulta del precio histórico puede realizarse utilizando el método
+~price_history~:
+#+begin_src python :tangle no
+  from scrappers.src import coingecko as datac
+  from datetime import datetime
+
+  init_date = datetime(2025, 6, 10).date()
+  end_date  = datetime(2025, 6, 16).date()
+
+  scrapper = datac.CoinGecko()
+  prices_dic = scrapper.price_history(init=init_date, end=end_date, coin_name="bitcoin")
+#+end_src
+
+Igual que con el otro scrapper, hay una forma de procesar la información
+histórica que se consulta aglutinando en un promedio semanal. El método
+~weekly_mean_price_history~ tiene el mismo comportamiento.
+#+begin_src python :tangle no
+  from scrappers.src import coingecko as datac
+  from datetime import datetime
+
+  init_date = datetime(2025, 6, 10).date()
+  end_date  = datetime(2025, 6, 16).date()
+
+  scrapper = datac.CoinGecko()
+  prices_dic = scrapper.weekly_mean_price_history(init=init_date, end=end_date, coin_name="bitcoin")
+#+end_src
+
+* Código
+Realmente el repositorio es un experimento, el código que se encuentra en ~src/~
+no fue escrito directamente sino que se usan los archivos ~.org~ para generar el
+código siguiendo los principios de /Literate Programming/ de Donald Knuth donde
+un documento que usa un lenguaje natural contiene /snippets/ con el código
+fuente que es después extraído. En este caso, se hace uso de ~org~babel~ con ese
+propósito, y se redacta un documento usando ~org-mode~ para después extraerlo y
+generar los archivos fuente. Este proyecto, por sencillo, parecería una
+oportunidad perfecta para probar el paradigma.
