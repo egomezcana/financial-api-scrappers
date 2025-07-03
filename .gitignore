@@ -54,5 +54,9 @@ flycheck_*.el
 # python environments
 /envs/
 
+# python binaries
+*.pyc
+
+
 
 # End of https://www.toptal.com/developers/gitignore/api/emacs
