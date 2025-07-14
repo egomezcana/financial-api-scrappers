@@ -1,0 +1,357 @@
+# -*- org-src-preserve-indentation: t; -*-
+#+title: Almacenaje de datos
+#+author: Eduardo Gomezcaña
+#+property: header-args:python :tangle ../src/database.py
+* Librerías
+No se requieren muchas librerías para realizar el /scrap/, basta uasr la
+/requests/ para manejar las transacciones, /json/ para obtener objetos de las
+cadenas con las que responde la /API/ y una serie de manejo de fechas para
+organizar correctamente la información que se consulta.
+#+begin_src python
+import sqlite3
+from datetime import date, datetime, time
+#+end_src
+
+* Clase base
+El módulo define una clase para manejar la base de datos usando la información
+extraída por los /scrappers/ junto a funciones específicas para guardado y
+extracción de tal información.
+#+begin_src python :noweb yes
+class FinancialDB:
+    """Clase sencilla para el mantenimiento de los datos extraídos por los
+    scrappers"""
+    db_path = None
+
+    <<constructor>>
+
+    <<execute>>
+
+    <<execute_query>>
+
+    <<execute_many>>
+
+    <<symbols_ids>>
+
+    <<scrap_consult>>
+
+    <<insert_product_bulk>>
+
+    <<process_buys>>
+
+    <<insert_buys_bulk>>
+
+    <<insert_scrap_prices>>
+#+end_src
+
+* Módulos de la clase
+** Constructor
+Lo único que se requiere para construir el objeto base de datos es la dirección
+en la que está almacenado el archivo de SQLite.
+#+name: constructor
+#+begin_src python :tangle no
+def __init__ (self, filepath):
+    """Constructor que define el nombre del archivo de la base de datos"""
+
+    # Define la localización de la base de datos cuando se requiera realizar una
+    # conexión
+    self.db_path = filepath
+#+end_src
+** Ejecución
+La ejecución de ~queries~ suele ser un punto sensible y realmente aquí queremos
+enmascarar en el objeto todo ese proceso, para realizarlo, vamos a encapsular la
+llamada a través de algunas funciones auxiliares. La primera es la verdadera
+envoltura (~wrap~) de la función, donde agregamos la posibilidad de atrapar
+errores y de comandar el cursor de la base de datos de manera externa a través
+de pasar una función.
+#+name: execute
+#+begin_src python :tangle no
+def _execute (self, calling_function):
+    """Una evoltura para ~execute~ en SQLite. No se requiere toda la potencia de
+    la librería al ser consultas muy dirigidas y la envoltura atrapa los errores
+    y devuelve el resultado de la consulta para su manipulación posterior"""
+
+    try:
+        # Envuelve la posibilidad de fallo en la conexión a base de datos
+        conn = sqlite3.connect(self.db_path)
+
+        # Genera un cursor y usa la función para indicar la ejecución que se
+        # desea a través de usar el cursor como parámetro
+        cursor = conn.cursor()
+        calling_function(cursor)
+
+        # Guarda los posiles cambios realizados a la base de datos
+        conn.commit()
+
+        # Extrae la información que coleccionó el cursor de la ejecución
+        return { 'fetched' : cursor.fetchall(),
+                 'rowcount': cursor.rowcount,
+                 'lastrowid': cursor.lastrowid }
+
+    except sqlite3.Error as error:
+        # Atrapa cualquier error en la ejecución de la base de datos y lo
+        # devuelve para informar cuál fue el problema
+        return error
+
+    finally:
+        # Una vez que retorna la función, se garantiza que la conexión se cierra
+        # adecuadamente
+        if conn:
+            conn.close()
+#+end_src
+
+Una vez que tenemos esa envoltura, simplemente atraemos las funciones que nos
+interesan y las encapsulamos a través de la función anterior permitiendo usar la
+información que requieren. Esto permite hacer una llamada a la base de datos sin
+tener que llamar a una conexión, el objeto termina manejando todo el proceso de
+manera invisible.
+#+name: execute_query
+#+begin_src python :tangle no
+def _execute_query (self, query_str, parameters=()):
+    """Una evoltura para ~execute_many~ en SQLite para manejar los posibles
+    problemas de manera externa"""
+
+    # Indica cómo debe llamarse a execute usando el cursor cuando esté
+    # disponible al conectarse a la base de datos
+    return self._execute(lambda cur: cur.execute(query_str, parameters))
+#+end_src
+
+#+name: execute_many
+#+begin_src python :tangle no
+def _execute_many (self, query_str, parameters):
+    """Una evoltura para ~execute_many~ en SQLite para manejar los posibles
+    problemas de manera externa"""
+
+    # Indica cómo debe llamarse a execute_many usando el cursor cuando esté
+    # disponible al conectarse a la base de datos
+    return self._execute(lambda cur: cur.executemany(query_str, parameters))
+#+end_src
+
+** Auxiliares
+Frecuentemente se requiere atraer los valores de identificación de las filas
+almacenadas en la tabla ~products~. La mayoría de las veces se requiere atraer
+varios de esos elementos y se toma una posición maximalista (al no ser grande la
+diversidad de elementos que se usan) cargando todos los productos en un
+diccionario para poder guardar las tablas con la llave externa. Se espera que el
+uso sea únicamente interno.
+#+name: symbols_ids
+#+begin_src python :tangle no
+def _symbols_ids (self):
+    """La función cumple una función auxiliar, hace una consulta de los IDs
+    correspondientes con los productos registrados. El uso principal se da
+    cuando deben insertarse datos nuevos en las tablas que compras y precios"""
+
+    # Define una query para traer los IDs requeridos
+    SQL_QUERY = "SELECT id, symbol, serie FROM products"
+
+    # Ejecuta la query en la base de datos
+    result = self._execute_query(SQL_QUERY)
+
+    # Genera un diccionario para devolver el ID
+    return { (symbol, serie) : db_id for db_id, symbol, serie in result["fetched"]}
+#+end_src
+
+** Consultas base
+#+name: scrap_consult
+#+begin_src python :tangle no
+def scrap_consult (self, symbols_list):
+    """Dada una lista que describe parejas símbolo+serie, devuelve un
+    diccionario usando esa misma pareja como clave y la información que se
+    requiere para hacer una consulta con el scrapper lo cual consiste en la
+    última fecha guardada y el origen del símbolo"""
+
+    # Define la instrucción requerida en la consulta
+    placeholders = ','.join(['?']*len(symbols_list))
+    SQL_QUERY = f"""SELECT products.symbol, products.serie, MAX(prices.date) FROM prices
+    INNER JOIN products ON products.id = prices.symbol
+    WHERE prices.symbol IN ({placeholders}) GROUP BY prices.symbol"""
+
+    # Atrae el diccionario de IDs para símbolo+serie
+    ids_dictionary = self._symbols_ids()
+
+    # Genera la lista de IDs para ejecutar la operación
+    data = [ids_dictionary[key_pair] for key_pair in symbols_list]
+
+    # Ejecuta la consulta
+    result = self._execute_query(SQL_QUERY, data)
+
+    # Crea el diccionario con la última fecha guardada
+    return { (symbol, serie) : datetime.utcfromtimestamp(str_date).date()
+             for symbol, serie, str_date in result["fetched"]}
+#+end_src
+
+** Actualizaciones en masa
+Para administrar los productos financieros que se requieren, se usa una tabla
+administrada usando ~org~. Esa tabla contiene todos los activos de interés con
+la respectiva información. Esencialmente, se busca hacer un /dump/ de la tabla
+en la base de datos. La tabla en cuestión tiene la siguiente forma:
+
+| Sección | Emisora | Serie   | Origen | Tipo | Compañía | Notas |
+|---------+---------+---------+--------+------+----------+-------|
+| STR     | STR     | STR/NUM | STR    | STR  | STR      | TEXT  |
+|         |         |         |        |      |          |       |
+|---------+---------+---------+--------+------+----------+-------|
+| STR     | STR     | STR/NUM | STR    | STR  | STR      | TEXT  |
+|         |         |         |        |      |          |       |
+
+Para poder guardar la información de la tabla, debe observarse que la primera
+columna contiene información sólo en algunas entradas, asumiendo que se acarrea
+de la entrada anterior no nula. La idea es procesar cada fila y generar una
+versión que contenga la información que se desea guardar y dejar que ~SQLite~
+decida si hay o no productos nuevos al almacenar.
+
+#+name: insert_product_bulk
+#+begin_src python :tangle no
+def insert_product_bulk(self, data_table, start_row=1):
+    """Para una tabla con la información relevante, inserta cada fila en masa
+    dentro de la base de datos. Esto se considegue extrayendo la información de
+    cada fila y organizándola en una tupla"""
+
+    SQL_INSERT = "INSERT OR IGNORE INTO products(symbol,serie,src,secc) VALUES (?,?,?,?)"
+
+    data = []
+    current_section = ""
+    for section, symbol, serie, source,_,_,_ in data_table[start_row:]:
+        if section != '':
+            current_section = section
+        insert_row = (symbol, serie, source, current_section)
+        data.append(insert_row)
+
+    return self._execute_many(SQL_INSERT, data)
+#+end_src
+
+Para registras las compras/ventas, se usan tablas con la información relevante y
+tienen la siguiente forma. Muchos de los espacios nacen a consideración de
+algunos cálculo que se realizar en la tabla usando la capacidades de ~org~ para
+su manipulación.
+
+|   | Cartera | Producto | Serie   | Fecha    | Status    | Cantidad | Valor unitario | Costo agregado | Comisión | IVA | Costo total | Anotaciones |
+|   |         |          |         |          |           |          |                |                |          |     |             |             |
+|---+---------+----------+---------+----------+-----------+----------+----------------+----------------+----------+-----+-------------+-------------|
+|   | STR     | STR      | STR/NUM | %Y-%m-%d | DONE/TODO | NUM      | NUM            | NUM            | NUM      | NUM | NUM         | TEXT        |
+
+Hay que tener en cuenta que esas tablas tienen una finalidad de ayuda visual y
+contienen información que puede ser reconstruida después o es innecesaria por lo
+que decide no guardarse. Además de esos valores descartados, debe asegurarse que
+los valores tengan la estructura correcta y en particular, deben distinguirse
+las tablas que registran las compras (valor positivo) de las ventas (valor
+negativo). Durante el registro de las tablas, no se hace explícito ese signo lo
+que hace imperativo que se registre esto durante el procesamiento en la
+siguiente función.
+#+name: process_buys
+#+begin_src python :tangle no
+@staticmethod
+def _op_processing(data_table, start_row=2, sign=1):
+     """Al recibir la tabla, debe definirse si el valor de la transacción es
+     positivo o negativo y si admitir sólo operaciones completadas. También se
+     hacen ajustes menores a los tipos de datos para garantizar que sean los
+     mismos que se tienen en la base de datos. La función se aisla porque el
+     proceso se realiza sobre al menos dos tablas de la misma forma antes de
+     continuar"""
+
+     # Regenera las filas de tabla, transformando la información que se ingresa
+     return [(str(symbol), str(serie), int(datetime.strptime(date, "%Y-%m-%d").timestamp()), sign*qty, sign*price)
+             for _, _, symbol, serie, date, status, qty, _, _, _, _, price,_ in data_table[start_row:]
+             if status == 'DONE']
+#+end_src
+
+Una vez procesada la información de la tabla, tenemos una colección de todos los
+tickets emitidos en una sola lista. La tabla de compras busca registrar las
+operaciones en un día, y aunque la tabla registre varias ventas o compras en un
+día, deben consolidarse acumulándose en una sola y esto es lo que se guarda en
+la tabla. Tiene un efecto indeseable que combinaría compras y ventas de un
+producto en un sólo día pero eso se considera irrelevante al no ser una práctica
+deseable. Una vez acumuladas, se generan las filas que van a almacenarse y se
+guardan en la tabla correspondiente.
+#+name: insert_buys_bulk
+#+begin_src python :tangle no
+def insert_buys_bulk(self, buys_table, sells_table, start_row=2):
+    """Para una tabla con la información relevante para una compra (si sign=1) o
+    una venta (si sign=-1), inserta esa información dentro de la base de datos
+    con una potencial modificación: Para insertar una fila con un elemento único
+    se requiere símbolo y fecha de compra/venta. Esto quiere decir las filas
+    deben acumularse antes de insertarse."""
+
+    # Define el query requerida para la operación
+    SQL_INSERT = "INSERT OR IGNORE INTO buys(symbol,qty,price,date) VALUES (?,?,?,?)"
+
+    # Extrae los IDs de la base de datos
+    ids_dictionary = self._symbols_ids()
+
+    # Une los tickets de compra y venta en una lista
+    tickets = self._op_processing(buys_table, start_row=start_row, sign=1) + self._op_processing(sells_table, start_row=start_row, sign=-1)
+
+    # Acumula los valores de compra y venta diarios por symbol+serie+date usando
+    # el ID de symbol+serie en la base de datos
+    day_tickets = {}
+    for symbol, serie, date, qty, price in tickets:
+        ticket_key = (ids_dictionary[(symbol,serie)], date)
+        ticket_qty_price = day_tickets.get(ticket_key, (0.0, 0.0))
+        day_tickets[ticket_key] = tuple(a + b for a, b in zip(ticket_qty_price, (qty,price)))
+
+    # Organiza la información acumulada para insertar la información
+    data = [ (symbol_id, qty, price, date) for (symbol_id, date), (qty, price) in day_tickets.items() ]
+
+    # Devuelve el resultado de ejecutar la query
+    return self._execute_many(SQL_INSERT, data)
+#+end_src
+
+Finalmente, el objetivo principal de la base de datos es guardar los precios que
+se han descargado para no tener que consultarlos de vuelta. Para eso, se atrae
+el diccionario con el que se interactúa en los ~scrappers~ y convierte éste en
+las filas que deben insertarse en la tabla de precios.
+#+name: insert_scrap_prices
+#+begin_src python :tangle no
+def insert_scrap_prices(self, scraps_dictionary):
+    # Define el query requerida para la operación
+    SQL_INSERT = "INSERT OR IGNORE INTO prices(symbol,date,price) VALUES (?,?,?)"
+
+    # Extrae los IDs de la base de datos
+    ids_dictionary = self._symbols_ids()
+
+    # Organiza las inserciones que debe realizarse como tuplas
+    data = [ (ids_dictionary[symbol_key], int(datetime.combine(date, time.min).timestamp()), price)
+             for symbol_key, prices_dictionary in scraps_dictionary.items()
+             for date, price in prices_dictionary.items()]
+
+    return self._execute_many(SQL_INSERT, data)
+#+end_src
+
+* Base de datos
+La estructura de la base de datos es sencilla y la podemos describir con un
+comando de ~SQL~. Ésta contiene tres tablas para almacenar los productos
+financieros que se utilizan, los precios de los productos que se usan, y las
+compras/ventas de cada uno. Con todo esto, se pretende dar un seguimiento del
+portafolio. En el caso de un producto, se usa su símbolo y serie para que este
+sea único junto con el identificador como clave primaria. En el caso de los
+precios, el rol de la unicidad lo juega el identificador del símbolo (como clave
+externa) y la fecha, sólo se quiere un precio por día. Finalmente, la unicidad
+en una compra se consigue con el símbolo (de nuevo como clave externa), junto al
+precio y la fecha. Esto último es un poco forzado y de momento funciona pero
+como las fechas se guardan como un entero representando la una hora estándar del
+día en UTC, se podría cambiar para que fuera única en el sentido de la hora con
+segundos incluidos si fuera necesario.
+#+name: db-structure
+#+begin_src sqlite :results silent
+CREATE TABLE IF NOT EXISTS products (
+       id INTEGER UNIQUE PRIMARY KEY,
+       symbol TEXT NOT NULL,
+       serie TEXT,
+       src TEXT,
+       secc TEXT,
+       UNIQUE(symbol, serie));
+CREATE TABLE IF NOT EXISTS prices (
+       id INTEGER UNIQUE PRIMARY KEY,
+       symbol INTEGER NOT NULL,
+       date INTEGER NOT NULL,
+       price REAL NOT NULL,
+       UNIQUE(symbol, date),
+       FOREIGN KEY(symbol) REFERENCES products(id));
+CREATE TABLE IF NOT EXISTS buys (
+       id INTEGER UNIQUE PRIMARY KEY,
+       symbol INTEGER NOT NULL,
+       qty REAL NOT NULL,
+       price REAL NOT NULL,
+       date INTEGER NOT NULL,
+       UNIQUE(symbol, price, date),
+       FOREIGN KEY(symbol) REFERENCES products(id));
+#+end_src
