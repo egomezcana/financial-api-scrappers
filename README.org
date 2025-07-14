@@ -5,7 +5,7 @@ Es un paquete muy simple para consultar la información de valores de manera
 condensada para poder usarla en el análisis de tendencias y particularmente en
 el seguimiento de un portafolio.
 
-* Módulos
+* Módulos de extracción
 El paquete de momento tiene sólo dos módulos uno para /[[https://www.databursatil.com/][DataBursatil]]/ una /API/
 para la consulta de activos en mercado mexicano y otra para la /API/ de
 /[[https://www.coingecko.com/es][CoinGecko]]/ para consultar el valor de criptomonedas.
@@ -42,24 +42,6 @@ La consulta del precio histórico puede realizarse utilizando el método
   prices_dic = scrapper.price_history(init=init_date, end=end_date, ticker = "VOO", series = "*")
 #+end_src
 
-También, hay una forma de procesar la información histórica que se consulta
-aglutinando en un promedio semanal, este promedio sólo se realiza sobre las
-semanas donde la información ya está disponible. Por ejemplo, si la fecha que se
-da es un miércoles, se considera la semana anterior y no la que está en curso.
-El método ~weekly_mean_price_history~ tiene el mismo comportamiento que
-~price_history~.
-#+begin_src python :tangle no
-  from scrappers.src import databursatil as datab
-  from datetime import datetime
-
-  TOKEN = "some_token"
-  init_date = datetime(2025, 6, 10).date()
-  end_date  = datetime(2025, 6, 16).date()
-
-  scrapper = datab.DataBursatil(TOKEN)
-  prices_dic = scrapper.weekly_price_history(init=init_date, end=end_date, ticker = "VOO", series = "*")
-#+end_src
-
 ** CoinGecko
 El uso del /scrapper/ para CoinGecko no es muy diferente, sigue la documentación
 de la /API/ de  /CoinGecko/ tanto para el precio actual como para los históricos
@@ -76,7 +58,8 @@ Para consultar el precio /en vivo/, se puede realizarse llamando al método
 #+end_src
 
 La consulta del precio histórico puede realizarse utilizando el método
-~price_history~:
+~price_history~. La única parte crucial es que debe usarse el ID que /CoinGecko/
+usa para identificar la moneda.
 #+begin_src python :tangle no
   from scrappers.src import coingecko as datac
   from datetime import datetime
@@ -88,21 +71,91 @@ La consulta del precio histórico puede realizarse utilizando el método
   prices_dic = scrapper.price_history(init=init_date, end=end_date, coin_name="bitcoin")
 #+end_src
 
-Igual que con el otro scrapper, hay una forma de procesar la información
-histórica que se consulta aglutinando en un promedio semanal. El método
-~weekly_mean_price_history~ tiene el mismo comportamiento.
+** Métodos comunes
+También, hay una forma de procesar la información histórica que se consulta
+aglutinando en un promedio semanal, este promedio sólo se realiza sobre las
+semanas donde la información ya está disponible. Por ejemplo, si la fecha que se
+da es un miércoles, se considera la semana anterior y no la que está en curso.
+El método ~weekly_mean_price_history~ tiene el mismo comportamiento que
+~price_history~. y la única diferencia entre los métodos de los dos /scrappers/
+es la identificación del activo: En /DataBursatil/ se requiere ~ticker+series~ y en
+/CoinGecko/ se requiere sólo ~coin_name~.
 #+begin_src python :tangle no
-  from scrappers.src import coingecko as datac
+  from scrappers.src import databursatil as datab
   from datetime import datetime
 
+  TOKEN = "some_token"
   init_date = datetime(2025, 6, 10).date()
   end_date  = datetime(2025, 6, 16).date()
 
-  scrapper = datac.CoinGecko()
-  prices_dic = scrapper.weekly_mean_price_history(init=init_date, end=end_date, coin_name="bitcoin")
+  scrapper = datab.DataBursatil(TOKEN)
+  prices_dic = scrapper.weekly_price_history(init=init_date, end=end_date, ticker = "VOO", series = "*")
 #+end_src
 
-* Código
+* Base de datos
+La idea de descargar la información es que no se consulte una vez más,
+principalmente por los sistema de tokens que usan frecuentemente. Esto ayuda a
+definir una colección de precios pero lo que quiere es conocer el valor de un
+portafolio. Esto quiere decir que hay tres frentes que deben cubrirse: Guardar
+la información clave de los productos financieros, conocer el estado del
+portafolio a través de las compras/ventas de activos y el seguimiento de los
+precios.
+
+** Tablas de registro
+Hay dos tipos de tablas que usan para poder presentar la información y que se
+usan para introducir ésta los métodos y guardarse en la base de datos. Los
+métodos de guardado de éstas son una simple traducción de su forma visual a su
+almacenado.
+
+** Métodos de guardado
+Para la definición de los productos financieros se utiliza una tabla en ~org~ y
+esta puede conectarse directamente a una función en el módulo de la base de
+datos para almacenarse. No se requiere hacer nada, la función decide si el
+activo ya ha sido guardado y lo descarta. No se espera que se use con
+frecuencia. Actualizar la tabla se consigue llamando al método
+~insert_product_bulk~:
+#+begin_src python :tangle no :var data=activos
+  from modules.scrappers.src import database as db
+
+  local_db = db.FinancialDB(DB_PATH)
+  answer = local_db.insert_product_bulk(data)
+#+end_src
+
+De manera similar, las tablas de compra y venta se pueden guardar de manera
+transparente sin tener que observar la lógica detrás simplemente llamando a la
+función ~insert_buys_bulk~. La única peculiaridad es que las dos tablas son
+necesarias. De nuevo, esta función se llama de manera esporádica aunque es más
+frecuente.
+#+begin_src python :tangle no :var data1=compras data2=ventas
+  from modules.scrappers.src import database as db
+
+  local_db = db.FinancialDB(DB_PATH)
+  answer = local_db.insert_buys_bulk(data1, data2)
+#+end_src
+
+Generalmente, la tabla de precios va a almacenar la información que se descarga
+desde los ~scrappers~. Para poder saber qué debe descargarse, debe consultarse
+primero la base de datos, y extraer las últimas fechas que se tienen
+registradas: Esto se consigue con el método ~scrap_consult~. Una vez que tenemos
+esas fechas, el diccionario generado por la función anterior puede directamente
+introducirse como entrada a la función ~consult_history_from~. Ésta devuelve los
+precios extraídos usando ~weekly_mean_price_history~ y los organiza en otro
+diccionario con las mismas claves. Éste último diccionario puede usarse con la
+función ~insert_scrap_prices~ para almacenar estos resultados en la base de
+datos.
+#+begin_src python :results output :var KEYS='(("BTC" "") ("XLM" ""))
+  from modules.scrappers.src import database as db
+  from modules.scrappers.src import databursatil as datab
+
+  scrapper = datab.DataBursatil(TOKEN)
+  local_db = db.FinancialDB(DB_PATH)
+
+  scrap_dates = local_db.scrap_consult(KEYS)
+  scrapped_data = scrapper.consult_history_from(scrap_dates)
+  answer = local_db.insert_scrap_prices(scrapped_data)
+#+end_src
+
+* Sobre el código
 Realmente el repositorio es un experimento, el código que se encuentra en ~src/~
 no fue escrito directamente sino que se usan los archivos ~.org~ para generar el
 código siguiendo los principios de /Literate Programming/ de Donald Knuth donde
