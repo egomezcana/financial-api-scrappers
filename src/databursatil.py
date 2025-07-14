@@ -74,6 +74,17 @@ class DataBursatil:
             week_dates  = self._week_list(monday)
             week_prices = [ prices[day] for day in week_dates if day in prices and prices[day] != 0.0 ]
             mean_price = sum(week_prices)/len(week_prices) if len(week_prices) != 0 else 0.0
-            week_mean_prices[monday] = mean_price
+            week_mean_prices[monday] = round(mean_price,2)
 
         return week_mean_prices
+
+    def consult_history_from (self, symbols_dict):
+        """Función para consultar los históricos de una lista de activos
+        (símbolo+serie) desde una fecha de interés. El diccionario tiene como
+        claves símbolo+serie y como valor la fecha desde la cual se debe
+        consultar el precio"""
+
+        today = date.today()
+
+        return { (ticker, series) : self.weekly_mean_price_history(init_date, today, ticker, series)
+                 for (ticker, series), init_date in symbols_dict.items() }

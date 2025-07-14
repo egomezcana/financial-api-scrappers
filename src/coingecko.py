@@ -4,6 +4,7 @@ from datetime import date, datetime, time, timedelta
 class CoinGecko:
     """Clase muy simple para contactar con la API de CoinGecko"""
     token = None
+    _IDs = {'ETH' : 'ethereum', 'BTC' : 'bitcoin', 'XLM' : 'stellar'}
 
     def __init__ (self, user_token=None):
         self.token = user_token
@@ -78,3 +79,14 @@ class CoinGecko:
             week_mean_prices[monday] = mean_price
 
         return week_mean_prices
+
+    def consult_history_from (self, symbols_dict):
+        """Función para consultar los históricos de una lista de activos
+        (símbolo+serie) desde una fecha de interés. El diccionario tiene como
+        claves símbolo+serie y como valor la fecha desde la cual se debe
+        consultar el precio"""
+
+        today = date.today()
+
+        return { (coin_symbol, series) : self.weekly_mean_price_history(init_date, today, self._IDs[coin_symbol])
+                 for (coin_symbol, series), init_date in symbols_dict.items() }
