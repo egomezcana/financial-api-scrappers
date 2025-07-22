@@ -44,6 +44,8 @@ class FinancialDB:
 
     <<consult:buys_timetable>>
 
+    <<consult:accumulated_buys_timetable>>
+
     <<consult:value_history>>
 
     <<consult:section_symbols>>
@@ -307,13 +309,66 @@ def consult_section_value(self, exclude = []):
              for section, last_value in result["fetched"] if section not in exclude}
 #+end_src
 
-En muchas ocasiones se requiere consultar cuánto se ha invertido en cierto
-producto hasta cierta fecha para conocer cómo se ha comportado la inversión y la
-tasa de retorno. Esta función extrae esa información considerando que se extrae
-en valor de compra sin ninguna clase de ajuste, sólo se hace en bruto.
+En muchas ocasiones, se necesita saber el orden en las compras para reportar que
+el valor de un producto ha subido no por las fluctuaciones de precio sino porque
+se ha adquirido más de éste. En ese caso, se extraen todas las compras del
+producto y se devuelve un diccionario con las compras realizadas en ese periodo.
+El único cambio es que la fecha inicial que se pide, acumula todo el valor de
+compra que se ha adquirido hasta esa fecha, el resto son reportes de compras
+individuales.
 #+name: consult:buys_timetable
 #+begin_src python :tangle no
 def consult_buys_timetable(self, symbols_list, init, end):
+    """Consulta la lista de compras y devuelve un diccionario con las claves de
+    los símbolos (symbol+serie) y cada clave tiene asignado otro diccionario con
+    las fechas como claves y el gasto del producto en esa fecha"""
+
+    # Define la instrucción requerida en la consulta
+    placeholders = ','.join(['?']*len(symbols_list))
+    SQL_QUERY = f"""SELECT products.symbol, products.serie, buys.date, buys.price
+    FROM buys JOIN products ON products.id = buys.symbol
+    WHERE buys.symbol IN ({placeholders})
+    ORDER BY buys.date"""
+
+    # Atrae el diccionario de IDs para símbolo+serie
+    ids_dictionary = self._symbols_ids()
+
+    # Genera la información para generar la consulta
+    data = [ids_dictionary[key_pair] for key_pair in symbols_list]
+
+    # Ejecuta la consulta y los placeholders deben acumularse
+    result = self._execute_query(SQL_QUERY, data)
+
+    # Inicializa los calendarios de compras
+    symbol_full_timetable = {key_pair: {} for key_pair in symbols_list}
+
+    # Agrega por diccionario y por fecha
+    for symbol, serie, utc_date, op_cost in result["fetched"]:
+        key = (symbol,serie)
+        current_date = self._utc2date(utc_date)
+        symbol_full_timetable[key][current_date] = round(op_cost,2)
+
+    # Inicializa el calendario limitado de compras
+    symbol_corrected_timetable = {key_pair: {} for key_pair in symbols_list}
+
+    # Ajusta las fechas previas al inicio
+    for symbol_pair, buy_dates in symbol_full_timetable.items():
+        pre_dates_value = sum([op_cost  for date, op_cost in buy_dates.items() if date <= init])
+        valid_dates_timetable = { date: value for date, value in buy_dates.items() if date > init and date <= end}
+        corrected_dates_timetable = { init: pre_dates_value } | (valid_dates_timetable)
+        symbol_corrected_timetable[symbol_pair] = corrected_dates_timetable
+
+    # Devuelve las acciones de compras
+    return symbol_corrected_timetable
+#+end_src
+
+En otras ocasiones se requiere consultar cuánto se ha invertido en cierto
+producto hasta una fecha dada para conocer cómo se ha comportado la inversión y
+la tasa de retorno. Esta función extrae esa información considerando que se
+extrae en valor de compra sin ninguna clase de ajuste, sólo se hace en bruto.
+#+name: consult:accumulated_buys_timetable
+#+begin_src python :tangle no
+def consult_accumulated_buys_timetable(self, symbols_list, init, end):
     """Consulta la lista de compras y devuelve un diccionario con las claves de
     los símbolos (symbol+serie) y cada clave tiene asignado otro diccionario con
     las fechas como claves y el gasto involucrado hasta esa fecha"""
@@ -338,28 +393,27 @@ def consult_buys_timetable(self, symbols_list, init, end):
     result = self._execute_query(SQL_QUERY, data)
 
     # Inicializa los calendarios de compras
-    full_symbol_timetable = {key_pair: {} for key_pair in symbols_list}
+    symbol_full_timetable = {key_pair: {} for key_pair in symbols_list}
 
     # Agrega por diccionario y por fecha
     for symbol, serie, utc_date, accumulated_cost in result["fetched"]:
         key = (symbol,serie)
         current_date = self._utc2date(utc_date)
-        full_symbol_timetable[key][current_date] = round(accumulated_cost,2)
+        symbol_full_timetable[key][current_date] = round(accumulated_cost,2)
 
     # Inicializa el calendario limitado de compras
-    corrected_symbol_timetable = {key_pair: {} for key_pair in symbols_list}
+    symbol_corrected_timetable = {key_pair: {} for key_pair in symbols_list}
 
     # Ajusta las fechas previas al inicio
-    for symbol_pair, buy_dates in full_symbol_timetable.it
-    ems():
-        valid_dates = [date for date in buy_dates.keys() if date <= init]
-        first_valid_value = 0.0 if len(valid_dates) == 0 else buy_dates[max(valid_dates)]
-        stripped_dates_values = { date: value for date, value in buy_dates.items() if date > init and date <= end}
-        corrected_dates_values = { init: first_valid_value } | (stripped_dates_values)
-        corrected_symbol_timetable[symbol_pair] = corrected_dates_values
+    for symbol_pair, buy_dates in symbol_full_timetable.items():
+        pre_dates = [date for date in buy_dates.keys() if date <= init]
+        corrected_first_value = 0.0 if len(pre_dates) == 0 else buy_dates[max(pre_dates)]
+        valid_dates_timetable = { date: value for date, value in buy_dates.items() if date > init and date <= end}
+        corrected_dates_timetable = { init: corrected_first_value } | (valid_dates_timetable)
+        symbol_corrected_timetable[symbol_pair] = corrected_dates_timetable
 
     # Devuelve las acciones de compra
-    return corrected_symbol_timetable
+    return symbol_corrected_timetable
 #+end_src
 
 Una de las consultas más recurrentes, requiere conocer el valor de los activos a
