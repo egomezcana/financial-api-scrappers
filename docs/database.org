@@ -3,13 +3,13 @@
 #+author: Eduardo Gomezcaña
 #+property: header-args:python :tangle ../src/database.py
 * Librerías
-No se requieren muchas librerías para realizar el /scrap/, basta uasr la
-/requests/ para manejar las transacciones, /json/ para obtener objetos de las
-cadenas con las que responde la /API/ y una serie de manejo de fechas para
-organizar correctamente la información que se consulta.
+Se requiere poco para manejar la base de datos, con la librería de ~SQLite~ es
+esencialmente suficiente. Se agregan algunas funciones de ~datetime~ para poder
+convertir entre el formato de fechas nativo de /Python/ y el formato UTC con el
+que se almacena en la base de datos.
 #+begin_src python
 import sqlite3
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 #+end_src
 
 * Clase base
@@ -44,7 +44,11 @@ class FinancialDB:
 
     <<consult:buys_timetable>>
 
+    <<consult:value_history>>
+
     <<consult:section_symbols>>
+
+    <<recent:full_value>>
 
     <<bulk:insert_product>>
 
@@ -68,7 +72,6 @@ def __init__ (self, filepath):
     # conexión
     self.db_path = filepath
 #+end_src
-
 ** Ejecución
 La ejecución de ~queries~ suele ser un punto sensible y realmente aquí queremos
 enmascarar en el objeto todo ese proceso, para realizarlo, vamos a encapsular la
@@ -176,7 +179,6 @@ def _utc2date(utc_timestamp):
 def _date2utc(given_date):
     return int(datetime.combine(given_date, time.min).timestamp())
 #+end_src
-
 
 ** Consultas base
 Una de las principales funciones que se requiere de la base de datos es
