@@ -171,6 +171,50 @@ class FinancialDB:
     def consult_buys_timetable(self, symbols_list, init, end):
         """Consulta la lista de compras y devuelve un diccionario con las claves de
         los símbolos (symbol+serie) y cada clave tiene asignado otro diccionario con
+        las fechas como claves y el gasto del producto en esa fecha"""
+    
+        # Define la instrucción requerida en la consulta
+        placeholders = ','.join(['?']*len(symbols_list))
+        SQL_QUERY = f"""SELECT products.symbol, products.serie, buys.date, buys.price
+        FROM buys JOIN products ON products.id = buys.symbol
+        WHERE buys.symbol IN ({placeholders})
+        ORDER BY buys.date"""
+    
+        # Atrae el diccionario de IDs para símbolo+serie
+        ids_dictionary = self._symbols_ids()
+    
+        # Genera la información para generar la consulta
+        data = [ids_dictionary[key_pair] for key_pair in symbols_list]
+    
+        # Ejecuta la consulta y los placeholders deben acumularse
+        result = self._execute_query(SQL_QUERY, data)
+    
+        # Inicializa los calendarios de compras
+        symbol_full_timetable = {key_pair: {} for key_pair in symbols_list}
+    
+        # Agrega por diccionario y por fecha
+        for symbol, serie, utc_date, op_cost in result["fetched"]:
+            key = (symbol,serie)
+            current_date = self._utc2date(utc_date)
+            symbol_full_timetable[key][current_date] = round(op_cost,2)
+    
+        # Inicializa el calendario limitado de compras
+        symbol_corrected_timetable = {}
+        symbol_initial_buys = {}
+    
+        # Ajusta las fechas previas al inicio
+        for symbol_pair, buy_dates in symbol_full_timetable.items():
+            initial_buy_value = sum([op_cost  for date, op_cost in buy_dates.items() if date < init])
+            symbol_initial_buys[symbol_pair] = initial_buy_value
+            symbol_corrected_timetable[symbol_pair] = { date: value
+                                                        for date, value in buy_dates.items() if date >= init and date <= end}
+    
+        # Devuelve las acciones de compras
+        return symbol_corrected_timetable, symbol_initial_buys
+
+    def consult_accumulated_buys_timetable(self, symbols_list, init, end):
+        """Consulta la lista de compras y devuelve un diccionario con las claves de
+        los símbolos (symbol+serie) y cada clave tiene asignado otro diccionario con
         las fechas como claves y el gasto involucrado hasta esa fecha"""
     
         # Define la instrucción requerida en la consulta
@@ -193,27 +237,27 @@ class FinancialDB:
         result = self._execute_query(SQL_QUERY, data)
     
         # Inicializa los calendarios de compras
-        full_symbol_timetable = {key_pair: {} for key_pair in symbols_list}
+        symbol_full_timetable = {key_pair: {} for key_pair in symbols_list}
     
         # Agrega por diccionario y por fecha
         for symbol, serie, utc_date, accumulated_cost in result["fetched"]:
             key = (symbol,serie)
             current_date = self._utc2date(utc_date)
-            full_symbol_timetable[key][current_date] = round(accumulated_cost,2)
+            symbol_full_timetable[key][current_date] = round(accumulated_cost,2)
     
-        # Inicializa el calendario limitado de compras
-        corrected_symbol_timetable = {key_pair: {} for key_pair in symbols_list}
+        # Inicializa el calendario limitado de compras y el valor
+        symbol_corrected_timetable = {}
+        symbol_initial_buys = {}
     
         # Ajusta las fechas previas al inicio
-        for symbol_pair, buy_dates in full_symbol_timetable.items():
-            valid_dates = [date for date in buy_dates.keys() if date <= init]
-            first_valid_value = 0.0 if len(valid_dates) == 0 else buy_dates[max(valid_dates)]
-            stripped_dates_values = { date: value for date, value in buy_dates.items() if date > init and date <= end}
-            corrected_dates_values = { init: first_valid_value } | (stripped_dates_values)
-            corrected_symbol_timetable[symbol_pair] = corrected_dates_values
+        for symbol_pair, buy_dates in symbol_full_timetable.items():
+            pre_dates = [date for date in buy_dates.keys() if date < init]
+            symbol_initial_buys[symbol_pair] = 0.0 if len(pre_dates) == 0 else buy_dates[max(pre_dates)]
+            symbol_corrected_timetable[symbol_pair] = { date: value
+                                                        for date, value in buy_dates.items() if date >= init and date <= end}
     
         # Devuelve las acciones de compra
-        return corrected_symbol_timetable
+        return symbol_corrected_timetable, symbol_initial_buys
 
     def consult_value_history(self, symbols_list, init, end):
         """Consulta los precios registrados de los activos en la lista de símbolos y
@@ -246,7 +290,8 @@ class FinancialDB:
         data = [ids_dictionary[key_pair] for key_pair in symbols_list]
     
         # Genera las fechas de consulta bajo las fechas dadas
-        utc_init, utc_end = self._date2utc(init), self._date2utc(end)
+        init_monday = init - timedelta(days = init.weekday())
+        utc_init, utc_end = self._date2utc(init_monday), self._date2utc(end)
     
         # Ejecuta la consulta y los placeholders de la primera query
         result1 = self._execute_query(SQL_QUERY1, data)
@@ -310,10 +355,10 @@ class FinancialDB:
     
         # Se realizan las dos consultas con la información
         values = self.consult_value_history(symbols_list, today_minus_30, today)
-        buys = self.consult_buys_timetable(symbols_list, today_minus_30, today)
+        buys, initial = self.consult_buys_timetable(symbols_list, today_minus_30, today)
     
         # Se devuelven los elementos como una pareja
-        return values, buys
+        return values, buys, initial
     
 
     def bulk_insert_product(self, data_table, start_row=1):
