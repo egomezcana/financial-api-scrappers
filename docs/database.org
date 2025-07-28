@@ -349,17 +349,18 @@ def consult_buys_timetable(self, symbols_list, init, end):
         symbol_full_timetable[key][current_date] = round(op_cost,2)
 
     # Inicializa el calendario limitado de compras
-    symbol_corrected_timetable = {key_pair: {} for key_pair in symbols_list}
+    symbol_corrected_timetable = {}
+    symbol_initial_buys = {}
 
     # Ajusta las fechas previas al inicio
     for symbol_pair, buy_dates in symbol_full_timetable.items():
-        pre_dates_value = sum([op_cost  for date, op_cost in buy_dates.items() if date <= init])
-        valid_dates_timetable = { date: value for date, value in buy_dates.items() if date > init and date <= end}
-        corrected_dates_timetable = { init: pre_dates_value } | (valid_dates_timetable)
-        symbol_corrected_timetable[symbol_pair] = corrected_dates_timetable
+        initial_buy_value = sum([op_cost  for date, op_cost in buy_dates.items() if date < init])
+        symbol_initial_buys[symbol_pair] = initial_buy_value
+        symbol_corrected_timetable[symbol_pair] = { date: value
+                                                    for date, value in buy_dates.items() if date >= init and date <= end}
 
     # Devuelve las acciones de compras
-    return symbol_corrected_timetable
+    return symbol_corrected_timetable, symbol_initial_buys
 #+end_src
 
 En otras ocasiones se requiere consultar cuánto se ha invertido en cierto
@@ -401,19 +402,19 @@ def consult_accumulated_buys_timetable(self, symbols_list, init, end):
         current_date = self._utc2date(utc_date)
         symbol_full_timetable[key][current_date] = round(accumulated_cost,2)
 
-    # Inicializa el calendario limitado de compras
-    symbol_corrected_timetable = {key_pair: {} for key_pair in symbols_list}
+    # Inicializa el calendario limitado de compras y el valor
+    symbol_corrected_timetable = {}
+    symbol_initial_buys = {}
 
     # Ajusta las fechas previas al inicio
     for symbol_pair, buy_dates in symbol_full_timetable.items():
-        pre_dates = [date for date in buy_dates.keys() if date <= init]
-        corrected_first_value = 0.0 if len(pre_dates) == 0 else buy_dates[max(pre_dates)]
-        valid_dates_timetable = { date: value for date, value in buy_dates.items() if date > init and date <= end}
-        corrected_dates_timetable = { init: corrected_first_value } | (valid_dates_timetable)
-        symbol_corrected_timetable[symbol_pair] = corrected_dates_timetable
+        pre_dates = [date for date in buy_dates.keys() if date < init]
+        symbol_initial_buys[symbol_pair] = 0.0 if len(pre_dates) == 0 else buy_dates[max(pre_dates)]
+        symbol_corrected_timetable[symbol_pair] = { date: value
+                                                    for date, value in buy_dates.items() if date >= init and date <= end}
 
     # Devuelve las acciones de compra
-    return symbol_corrected_timetable
+    return symbol_corrected_timetable, symbol_initial_buys
 #+end_src
 
 Una de las consultas más recurrentes, requiere conocer el valor de los activos a
@@ -452,7 +453,8 @@ def consult_value_history(self, symbols_list, init, end):
     data = [ids_dictionary[key_pair] for key_pair in symbols_list]
 
     # Genera las fechas de consulta bajo las fechas dadas
-    utc_init, utc_end = self._date2utc(init), self._date2utc(end)
+    init_monday = init - timedelta(days = init.weekday())
+    utc_init, utc_end = self._date2utc(init_monday), self._date2utc(end)
 
     # Ejecuta la consulta y los placeholders de la primera query
     result1 = self._execute_query(SQL_QUERY1, data)
@@ -527,10 +529,10 @@ def recent_full_value_history(self, symbols_list):
 
     # Se realizan las dos consultas con la información
     values = self.consult_value_history(symbols_list, today_minus_30, today)
-    buys = self.consult_buys_timetable(symbols_list, today_minus_30, today)
+    buys, initial = self.consult_buys_timetable(symbols_list, today_minus_30, today)
 
     # Se devuelven los elementos como una pareja
-    return values, buys
+    return values, buys, initial
 
 #+end_src
 
